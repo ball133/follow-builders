@@ -38,4 +38,5 @@ jobs:
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
         run: |
           node ./scripts/prepare-digest.js --render --out digest.md
-          node ./scripts/deliver.js --file digest.md --attach digest.md
+          node ./scripts/prepare-digest.js --render-md --out note.md
+          node ./scripts/deliver.js --file digest.md --attach note.md

@@ -108,7 +108,29 @@ function buildLlmInput(output) {
   };
 }
 
-function buildMdTemplate(dateYmd, periodLabel) {
+function buildMdTemplate(dateYmd, periodLabel, builderNames) {
+  const uniqueBuilders = Array.from(new Set((builderNames || []).filter(Boolean)));
+  const xSections =
+    uniqueBuilders.length > 0
+      ? uniqueBuilders
+          .map(name =>
+            [
+              `### ${name}`,
+              '',
+              '- **Point:**',
+              '- **My take:**',
+              '',
+            ].join('\n'),
+          )
+          .join('\n')
+      : [
+          '### Highlights',
+          '',
+          '- **Point:**',
+          '- **My take:**',
+          '',
+        ].join('\n');
+
   return [
     '---',
     `title: "AI Builders Digest — ${dateYmd}"`,
@@ -120,7 +142,9 @@ function buildMdTemplate(dateYmd, periodLabel) {
     '  - ai/agents',
     '  - thesis/investing',
     '  - source/newsletter',
-    'people: []',
+    ...(uniqueBuilders.length > 0
+      ? ['people:', ...uniqueBuilders.map(n => `  - ${n}`)]
+      : ['people: []']),
     'themes: []',
     'tickers: []',
     'status: processed',
@@ -138,6 +162,8 @@ function buildMdTemplate(dateYmd, periodLabel) {
     '---',
     '',
     '## X / Twitter Highlights',
+    '',
+    xSections.trimEnd(),
     '',
     '---',
     '',
@@ -239,19 +265,20 @@ async function generateMdNoteWithDeepseek(output, dateYmd, periodLabel) {
     `- date must be exactly: ${dateYmd}`,
     `- period must be exactly: ${periodLabel}`,
     "- tags must include: ai/infra, ai/agents, thesis/investing, source/newsletter",
-    '- people must include the builder names you actually reference in the X section (use display names, not @handles).',
+    '- people should include the builder names you reference in the X section (use display names, not @handles).',
     '- themes must be 3-7 kebab-case items that describe the day (e.g., token-budgeting, agents, local-models).',
     '- tickers must be an array (can be empty).',
     "- status must be: processed",
     '',
     'Content rules:',
-    '- Every builder section must have at least Point + My take (or the specific prompts in the section).',
-    '- Use tweet links when available.',
+    '- Under each builder heading, fill Point + My take.',
+    '- Include links: under each builder section add a "Links:" line and 1-3 Markdown links to the most relevant tweets for that builder (use the tweet URLs).',
+    "- Do not remove any headings. You may leave a builder section blank only if there is truly no content, but still keep the heading.",
     '- Do not invent facts, metrics, or tickers. If unclear, write a cautious note.',
     '',
     'Use this template verbatim and fill it in:',
     '```markdown',
-    buildMdTemplate(dateYmd, periodLabel),
+    buildMdTemplate(dateYmd, periodLabel, builderList),
     '```',
     '',
     'Builders available today (use as people candidates; include only those you actually mention):',
