@@ -16,9 +16,9 @@
 // Output: JSON to stdout
 // ============================================================================
 
-import { readFile, mkdir } from 'fs/promises';
+import { readFile, mkdir, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { config as loadEnv } from 'dotenv';
 
@@ -66,6 +66,24 @@ function truncateText(text, maxChars) {
   return text.slice(0, maxChars) + '\n...[truncated]...';
 }
 
+function getArgValue(args, flag) {
+  const idx = args.indexOf(flag);
+  if (idx === -1) return null;
+  const value = args[idx + 1];
+  if (!value || value.startsWith('--')) return null;
+  return value;
+}
+
+function dateYmdInTimeZone(timeZone, date = new Date()) {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  return fmt.format(date);
+}
+
 function buildLlmInput(output) {
   return {
     generatedAt: output.generatedAt,
@@ -90,6 +108,61 @@ function buildLlmInput(output) {
   };
 }
 
+function buildMdTemplate(dateYmd, periodLabel) {
+  return [
+    '---',
+    `title: "AI Builders Digest — ${dateYmd}"`,
+    `date: ${dateYmd}`,
+    'source: "AI Builders Digest"',
+    `period: ${periodLabel}`,
+    'tags:',
+    '  - ai/infra',
+    '  - ai/agents',
+    '  - thesis/investing',
+    '  - source/newsletter',
+    'people: []',
+    'themes: []',
+    'tickers: []',
+    'status: processed',
+    '---',
+    '',
+    `# AI Builders Digest — ${dateYmd}`,
+    '',
+    '## Snapshot',
+    '',
+    '- **Market theme:**',
+    '- **Infra / tooling:**',
+    '- **Agents / products:**',
+    '- **Personal action for this week:**',
+    '',
+    '---',
+    '',
+    '## X / Twitter Highlights',
+    '',
+    '---',
+    '',
+    '## Podcast / Long‑form',
+    '',
+    '---',
+    '',
+    '## Investment & Trading Angles',
+    '',
+    '---',
+    '',
+    '## Build / Research Backlog',
+    '',
+    '---',
+    '',
+    '## Links & Metadata',
+    '',
+    '### MOCs',
+    '',
+    '- [[AI – Agents MOC]]',
+    '- [[AI – Infra MOC]]',
+    '- [[AI – Investing MOC]]'
+  ].join('\n');
+}
+
 async function generateDigestWithDeepseek(output) {
   const apiKey = process.env.DEEPSEEK_API_KEY;
   if (!apiKey) throw new Error('DEEPSEEK_API_KEY not found in .env');
@@ -111,6 +184,87 @@ async function generateDigestWithDeepseek(output) {
     '--- translate ---',
     output.prompts?.translate || ''
   ].join('\n\n');
+
+  const user = JSON.stringify(buildLlmInput(output));
+
+  const res = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user }
+      ],
+      temperature: 0.2,
+      stream: false
+    }),
+    signal: AbortSignal.timeout(120000)
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`DeepSeek API error (${res.status}): ${text || res.statusText}`);
+  }
+
+  const data = await res.json();
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error('DeepSeek API returned empty content');
+  return content.trim();
+}
+
+async function generateMdNoteWithDeepseek(output, dateYmd, periodLabel) {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) throw new Error('DEEPSEEK_API_KEY not found in .env');
+
+  const baseUrl = (process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/$/, '');
+  const model = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
+
+  const builders = (output.x || [])
+    .map(a => a.name || a.username || a.handle)
+    .filter(Boolean);
+  const builderList = Array.from(new Set(builders)).slice(0, 30);
+
+  const system = [
+    'You are a careful summarizer and analyst writing a Markdown note for Obsidian.',
+    'Output must be valid Markdown only. Do not output JSON.',
+    'The output MUST match this structure exactly: YAML frontmatter, then headings/sections.',
+    'Do not add extra top-level sections. Fill the existing fields/sections.',
+    'YAML rules: use proper indentation. Arrays must be YAML lists (dash items).',
+    'Frontmatter requirements:',
+    `- title must be exactly: AI Builders Digest — ${dateYmd}`,
+    `- date must be exactly: ${dateYmd}`,
+    `- period must be exactly: ${periodLabel}`,
+    "- tags must include: ai/infra, ai/agents, thesis/investing, source/newsletter",
+    '- people must include the builder names you actually reference in the X section (use display names, not @handles).',
+    '- themes must be 3-7 kebab-case items that describe the day (e.g., token-budgeting, agents, local-models).',
+    '- tickers must be an array (can be empty).',
+    "- status must be: processed",
+    '',
+    'Content rules:',
+    '- Every builder section must have at least Point + My take (or the specific prompts in the section).',
+    '- Use tweet links when available.',
+    '- Do not invent facts, metrics, or tickers. If unclear, write a cautious note.',
+    '',
+    'Use this template verbatim and fill it in:',
+    '```markdown',
+    buildMdTemplate(dateYmd, periodLabel),
+    '```',
+    '',
+    'Builders available today (use as people candidates; include only those you actually mention):',
+    builderList.length > 0 ? builderList.map(n => `- ${n}`).join('\n') : '(none)',
+    '',
+    'Additional guidance (summaries):',
+    '--- summarize_podcast ---',
+    output.prompts?.summarize_podcast || '',
+    '--- summarize_tweets ---',
+    output.prompts?.summarize_tweets || '',
+    '--- summarize_blogs ---',
+    output.prompts?.summarize_blogs || ''
+  ].join('\n');
 
   const user = JSON.stringify(buildLlmInput(output));
 
@@ -246,8 +400,27 @@ async function main() {
   };
 
   const args = process.argv.slice(2);
+  const outPathArg = getArgValue(args, '--out');
+  const outPath = outPathArg ? resolve(process.cwd(), outPathArg) : null;
+  const timeZone = config.timezone || process.env.DIGEST_TIMEZONE || 'UTC';
+  const dateYmd = dateYmdInTimeZone(timeZone);
+  const periodLabel =
+    (config.frequency || 'daily').toLowerCase() === 'weekly' ? 'Weekly' : 'Daily';
+
+  if (args.includes('--render-md')) {
+    const md = await generateMdNoteWithDeepseek(output, dateYmd, periodLabel);
+    if (outPath) {
+      await writeFile(outPath, md + '\n', 'utf-8');
+    }
+    console.log(md);
+    return;
+  }
+
   if (args.includes('--render')) {
     const digest = await generateDigestWithDeepseek(output);
+    if (outPath) {
+      await writeFile(outPath, digest + '\n', 'utf-8');
+    }
     console.log(digest);
     return;
   }

@@ -22,7 +22,7 @@
 
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { basename, join, resolve } from 'path';
 import { homedir } from 'os';
 import { config as loadEnv } from 'dotenv';
 import nodemailer from 'nodemailer';
@@ -38,7 +38,15 @@ async function readJsonFile(filePath) {
   return JSON.parse(raw.replace(/^\uFEFF/, ''));
 }
 
-async function sendSmtpEmail(text, toEmail) {
+function getArgValue(args, flag) {
+  const idx = args.indexOf(flag);
+  if (idx === -1) return null;
+  const value = args[idx + 1];
+  if (!value || value.startsWith('--')) return null;
+  return value;
+}
+
+async function sendSmtpEmail(text, toEmail, attachmentPath) {
   const host = process.env.SMTP_SERVER;
   const port = Number(process.env.SMTP_PORT || 587);
   const user = process.env.SMTP_USER;
@@ -71,13 +79,24 @@ async function sendSmtpEmail(text, toEmail) {
       : {})
   });
 
+  const attachments = attachmentPath
+    ? [
+        {
+          filename: basename(attachmentPath),
+          path: attachmentPath,
+          contentType: 'text/markdown'
+        }
+      ]
+    : undefined;
+
   await transport.sendMail({
     from,
     to: toEmail,
     subject: `AI Builders Digest — ${new Date().toLocaleDateString('en-US', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
     })}`,
-    text
+    text,
+    attachments
   });
 }
 
@@ -204,6 +223,10 @@ async function main() {
   // Load env and config
   loadEnv({ path: ENV_PATH });
 
+  const args = process.argv.slice(2);
+  const attachArg = getArgValue(args, '--attach');
+  const attachmentPath = attachArg ? resolve(process.cwd(), attachArg) : null;
+
   let config = {};
   if (existsSync(CONFIG_PATH)) {
     config = await readJsonFile(CONFIG_PATH);
@@ -254,7 +277,7 @@ async function main() {
 
         case 'smtp': {
           const toEmail = delivery.email;
-          await sendSmtpEmail(digestText, toEmail);
+          await sendSmtpEmail(digestText, toEmail, attachmentPath);
           console.log(JSON.stringify({
             status: 'ok',
             method: 'smtp',

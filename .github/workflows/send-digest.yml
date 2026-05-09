@@ -23,7 +23,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DELIVERY_EMAIL: ${{ secrets.DELIVERY_EMAIL }}
         run: |
-          node -e "const fs=require('fs'); const os=require('os'); const path=require('path'); const dir=path.join(os.homedir(),'.follow-builders'); fs.mkdirSync(dir,{recursive:true}); const cfg={language:'en',frequency:'daily',delivery:{methods:['telegram','smtp'],chatId:process.env.TELEGRAM_CHAT_ID,email:process.env.DELIVERY_EMAIL}}; fs.writeFileSync(path.join(dir,'config.json'), JSON.stringify(cfg,null,2));"
+          node -e "const fs=require('fs'); const os=require('os'); const path=require('path'); const dir=path.join(os.homedir(),'.follow-builders'); fs.mkdirSync(dir,{recursive:true}); const cfg={language:'en',timezone:'Asia/Hong_Kong',frequency:'daily',delivery:{methods:['telegram','smtp'],chatId:process.env.TELEGRAM_CHAT_ID,email:process.env.DELIVERY_EMAIL}}; fs.writeFileSync(path.join(dir,'config.json'), JSON.stringify(cfg,null,2));"
 
       - name: Generate and deliver digest
         env:
@@ -36,4 +36,6 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
-        run: node ./scripts/prepare-digest.js --render | node ./scripts/deliver.js
+        run: |
+          node ./scripts/prepare-digest.js --render-md --out digest.md
+          node ./scripts/deliver.js --file digest.md --attach digest.md
