@@ -20,11 +20,13 @@ import { readFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { config as loadEnv } from 'dotenv';
 
 // -- Constants ---------------------------------------------------------------
 
 const USER_DIR = join(homedir(), '.follow-builders');
 const CONFIG_PATH = join(USER_DIR, 'config.json');
+const ENV_PATH = join(USER_DIR, '.env');
 
 const FEED_X_URL = 'https://raw.githubusercontent.com/zarazhangrui/follow-builders/main/feed-x.json';
 const FEED_PODCASTS_URL = 'https://raw.githubusercontent.com/zarazhangrui/follow-builders/main/feed-podcasts.json';
@@ -53,10 +55,100 @@ async function fetchText(url) {
   return res.text();
 }
 
+async function readJsonFile(filePath) {
+  const raw = await readFile(filePath, 'utf-8');
+  return JSON.parse(raw.replace(/^\uFEFF/, ''));
+}
+
+function truncateText(text, maxChars) {
+  if (!text) return text;
+  if (text.length <= maxChars) return text;
+  return text.slice(0, maxChars) + '\n...[truncated]...';
+}
+
+function buildLlmInput(output) {
+  return {
+    generatedAt: output.generatedAt,
+    config: output.config,
+    stats: output.stats,
+    podcasts: (output.podcasts || []).map(p => ({
+      ...p,
+      transcript: truncateText(p.transcript, 12000)
+    })),
+    x: (output.x || []).map(a => ({
+      ...a,
+      tweets: (a.tweets || []).map(t => ({
+        ...t,
+        text: truncateText(t.text, 1500)
+      }))
+    })),
+    blogs: (output.blogs || []).map(b => ({
+      ...b,
+      content: truncateText(b.content, 12000)
+    })),
+    errors: output.errors
+  };
+}
+
+async function generateDigestWithDeepseek(output) {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) throw new Error('DEEPSEEK_API_KEY not found in .env');
+
+  const baseUrl = (process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/$/, '');
+  const model = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
+
+  const system = [
+    'Output only the final digest in Markdown. Do not output JSON.',
+    'Follow these instructions exactly.',
+    '--- digest_intro ---',
+    output.prompts?.digest_intro || '',
+    '--- summarize_podcast ---',
+    output.prompts?.summarize_podcast || '',
+    '--- summarize_tweets ---',
+    output.prompts?.summarize_tweets || '',
+    '--- summarize_blogs ---',
+    output.prompts?.summarize_blogs || '',
+    '--- translate ---',
+    output.prompts?.translate || ''
+  ].join('\n\n');
+
+  const user = JSON.stringify(buildLlmInput(output));
+
+  const res = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user }
+      ],
+      temperature: 0.2,
+      stream: false
+    }),
+    signal: AbortSignal.timeout(120000)
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`DeepSeek API error (${res.status}): ${text || res.statusText}`);
+  }
+
+  const data = await res.json();
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error('DeepSeek API returned empty content');
+  return content.trim();
+}
+
 // -- Main --------------------------------------------------------------------
 
 async function main() {
   const errors = [];
+
+  loadEnv({ path: ENV_PATH });
 
   // 1. Read user config
   let config = {
@@ -66,7 +158,7 @@ async function main() {
   };
   if (existsSync(CONFIG_PATH)) {
     try {
-      config = JSON.parse(await readFile(CONFIG_PATH, 'utf-8'));
+      config = await readJsonFile(CONFIG_PATH);
     } catch (err) {
       errors.push(`Could not read config: ${err.message}`);
     }
@@ -152,6 +244,13 @@ async function main() {
     // Non-fatal errors
     errors: errors.length > 0 ? errors : undefined
   };
+
+  const args = process.argv.slice(2);
+  if (args.includes('--render')) {
+    const digest = await generateDigestWithDeepseek(output);
+    console.log(digest);
+    return;
+  }
 
   console.log(JSON.stringify(output, null, 2));
 }

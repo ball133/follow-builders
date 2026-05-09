@@ -1,0 +1,39 @@
+name: Send Digest
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: cd scripts && npm ci
+
+      - name: Write config
+        env:
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DELIVERY_EMAIL: ${{ secrets.DELIVERY_EMAIL }}
+        run: |
+          node -e "const fs=require('fs'); const os=require('os'); const path=require('path'); const dir=path.join(os.homedir(),'.follow-builders'); fs.mkdirSync(dir,{recursive:true}); const cfg={language:'en',frequency:'daily',delivery:{methods:['telegram','smtp'],chatId:process.env.TELEGRAM_CHAT_ID,email:process.env.DELIVERY_EMAIL}}; fs.writeFileSync(path.join(dir,'config.json'), JSON.stringify(cfg,null,2));"
+
+      - name: Generate and deliver digest
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_MODEL: ${{ secrets.DEEPSEEK_MODEL }}
+          DEEPSEEK_BASE_URL: ${{ secrets.DEEPSEEK_BASE_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+        run: node ./scripts/prepare-digest.js --render | node ./scripts/deliver.js

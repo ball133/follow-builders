@@ -25,12 +25,61 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { config as loadEnv } from 'dotenv';
+import nodemailer from 'nodemailer';
 
 // -- Constants ---------------------------------------------------------------
 
 const USER_DIR = join(homedir(), '.follow-builders');
 const CONFIG_PATH = join(USER_DIR, 'config.json');
 const ENV_PATH = join(USER_DIR, '.env');
+
+async function readJsonFile(filePath) {
+  const raw = await readFile(filePath, 'utf-8');
+  return JSON.parse(raw.replace(/^\uFEFF/, ''));
+}
+
+async function sendSmtpEmail(text, toEmail) {
+  const host = process.env.SMTP_SERVER;
+  const port = Number(process.env.SMTP_PORT || 587);
+  const user = process.env.SMTP_USER;
+  const pass =
+    process.env.SMTP_PASS ||
+    process.env.SMTP_PASSWORD ||
+    process.env.SMTP_APP_PASSWORD;
+  const allowInvalidCerts = String(process.env.SMTP_ALLOW_INVALID_CERTS || '')
+    .toLowerCase()
+    .trim();
+  const shouldAllowInvalidCerts =
+    allowInvalidCerts === '1' ||
+    allowInvalidCerts === 'true' ||
+    allowInvalidCerts === 'yes';
+
+  if (!host) throw new Error('SMTP_SERVER not found in .env');
+  if (!user) throw new Error('SMTP_USER not found in .env');
+  if (!pass) throw new Error('SMTP_PASS not found in .env');
+  if (!toEmail) throw new Error('delivery.email not found in config.json');
+
+  const from = process.env.SMTP_FROM || user;
+
+  const transport = nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: { user, pass },
+    ...(shouldAllowInvalidCerts
+      ? { tls: { rejectUnauthorized: false } }
+      : {})
+  });
+
+  await transport.sendMail({
+    from,
+    to: toEmail,
+    subject: `AI Builders Digest — ${new Date().toLocaleDateString('en-US', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+    })}`,
+    text
+  });
+}
 
 // -- Read input --------------------------------------------------------------
 
@@ -157,7 +206,7 @@ async function main() {
 
   let config = {};
   if (existsSync(CONFIG_PATH)) {
-    config = JSON.parse(await readFile(CONFIG_PATH, 'utf-8'));
+    config = await readJsonFile(CONFIG_PATH);
   }
 
   const delivery = config.delivery || { method: 'stdout' };
@@ -169,45 +218,61 @@ async function main() {
   }
 
   try {
-    switch (delivery.method) {
-      case 'telegram': {
-        const botToken = process.env.TELEGRAM_BOT_TOKEN;
-        const chatId = delivery.chatId;
-        if (!botToken) throw new Error('TELEGRAM_BOT_TOKEN not found in .env');
-        if (!chatId) throw new Error('delivery.chatId not found in config.json');
-        await sendTelegram(digestText, botToken, chatId);
-        console.log(JSON.stringify({
-          status: 'ok',
-          method: 'telegram',
-          message: 'Digest sent to Telegram'
-        }));
-        break;
-      }
+    const methods = Array.isArray(delivery.methods)
+      ? delivery.methods
+      : [delivery.method || 'stdout'];
 
-      case 'email': {
-        const apiKey = process.env.RESEND_API_KEY;
-        const toEmail = delivery.email;
-        if (!apiKey) throw new Error('RESEND_API_KEY not found in .env');
-        if (!toEmail) throw new Error('delivery.email not found in config.json');
-        await sendEmail(digestText, apiKey, toEmail);
-        console.log(JSON.stringify({
-          status: 'ok',
-          method: 'email',
-          message: `Digest sent to ${toEmail}`
-        }));
-        break;
-      }
+    for (const method of methods) {
+      switch (method) {
+        case 'telegram': {
+          const botToken = process.env.TELEGRAM_BOT_TOKEN;
+          const chatId = delivery.chatId;
+          if (!botToken) throw new Error('TELEGRAM_BOT_TOKEN not found in .env');
+          if (!chatId) throw new Error('delivery.chatId not found in config.json');
+          await sendTelegram(digestText, botToken, chatId);
+          console.log(JSON.stringify({
+            status: 'ok',
+            method: 'telegram',
+            message: 'Digest sent to Telegram'
+          }));
+          break;
+        }
 
-      case 'stdout':
-      default:
-        // Just print to terminal — the agent or OpenClaw handles delivery
-        console.log(digestText);
-        break;
+        case 'email': {
+          const apiKey = process.env.RESEND_API_KEY;
+          const toEmail = delivery.email;
+          if (!apiKey) throw new Error('RESEND_API_KEY not found in .env');
+          if (!toEmail) throw new Error('delivery.email not found in config.json');
+          await sendEmail(digestText, apiKey, toEmail);
+          console.log(JSON.stringify({
+            status: 'ok',
+            method: 'email',
+            message: `Digest sent to ${toEmail}`
+          }));
+          break;
+        }
+
+        case 'smtp': {
+          const toEmail = delivery.email;
+          await sendSmtpEmail(digestText, toEmail);
+          console.log(JSON.stringify({
+            status: 'ok',
+            method: 'smtp',
+            message: `Digest sent to ${toEmail}`
+          }));
+          break;
+        }
+
+        case 'stdout':
+        default:
+          console.log(digestText);
+          break;
+      }
     }
   } catch (err) {
     console.log(JSON.stringify({
       status: 'error',
-      method: delivery.method,
+      method: Array.isArray(delivery.methods) ? delivery.methods.join(',') : delivery.method,
       message: err.message
     }));
     process.exit(1);

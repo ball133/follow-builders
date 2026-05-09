@@ -40,11 +40,19 @@
       "type": "object",
       "description": "How the digest is delivered to the user",
       "properties": {
+        "methods": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["stdout", "telegram", "email", "smtp"]
+          },
+          "description": "Optional list of delivery methods to run in order"
+        },
         "method": {
           "type": "string",
-          "enum": ["stdout", "telegram", "email"],
+          "enum": ["stdout", "telegram", "email", "smtp"],
           "default": "stdout",
-          "description": "Delivery method: stdout (terminal/agent), telegram (bot message), email (via Resend)"
+          "description": "Delivery method: stdout (terminal/agent), telegram (bot message), email (via Resend), smtp (via SMTP server)"
         },
         "chatId": {
           "type": "string",
@@ -52,7 +60,7 @@
         },
         "email": {
           "type": "string",
-          "description": "Email address to send digest to (only for email method)"
+          "description": "Email address to send digest to (for email or smtp method)"
         }
       }
     },
